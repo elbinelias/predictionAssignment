@@ -1,0 +1,109 @@
+##Prediction Assignment Writeup
+####Elbin Elias
+
+###Synopsis
+The goal of the project is to build a prediction model to determine the pattern in which excercise is being done. There is a training set and test set already available (see data sources below). Below are the steps followed
+- Reading the training and test set
+- Imputing the missing values 
+- Reducing the number of variables used in the prediction
+- Fitting the model using the train function (caret package)
+- Predicting using the model the excerice pattern for the 20 test cases
+
+Data source: http://groupware.les.inf.puc-rio.br/har
+Training: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+Testing: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+###Reading the data
+```{r cache=TRUE}
+training <- read.csv("pml-training.csv",na.strings=c('#DIV/0', 'NA'))
+testing <- read.csv("pml-testing.csv",na.strings=c('#DIV/0', 'NA'))
+testing$avg_pitch_belt <- as.numeric(testing$avg_pitch_belt)
+testing$var_roll_arm <- as.numeric(testing$var_roll_arm)
+testing$var_roll_dumbbell <- as.numeric(testing$var_roll_dumbbell)
+testing$avg_pitch_dumbbell <- as.numeric(testing$avg_pitch_dumbbell)
+testing$var_yaw_dumbbell <- as.numeric(testing$var_yaw_dumbbell)
+testing$var_pitch_forearm <- as.numeric(testing$var_pitch_forearm)
+```
+
+###Understanding the data
+Users and the excercises of different types performed
+```{r}
+library(ggplot2)
+g <- qplot(cvtd_timestamp,classe,colour=user_name,data=training)
+g <- g + labs(title="Types of excerise per user",x="Time",y="Excersice type")
+g <- g + theme(axis.text.x=element_text(angle=90,hjust=1))
+g
+```
+
+The training set contains the excercise data for each of the users on a day monitored for a couple of minutes or more. Every user does excercise A to E. The first six columns in the training set cannot predict the type of excercise, hence are ignored further in the analysis. These variables are timestamp/window and does not add anything to the prediction.
+
+###Preprocessing
+```{r}
+trainingNew <- training[7:160]
+library(caret)
+library(mice)
+set.seed(1234)
+nonFactorVar <- which(sapply(colnames(trainingNew),function(x) !is.factor(trainingNew[,x])))
+factorVar <- which(sapply(colnames(trainingNew),function(x) is.factor(trainingNew[,x])))
+nonFactorVar <- names(nonFactorVar)
+factorVar <- names(factorVar)
+```
+
+The first step being done is to impute the missing values. The imputting is required for non-factor variables For the factor variables, there were no missing values that need to be replaced.
+```{r cache=TRUE, results='hide'}
+trainingNonFactor <- mice(trainingNew[,nonFactorVar],m=1,method="pmm",maxit=50)
+```
+
+The number of variables used in the prediction are reduced using nearZeroVar and fitting to a glm, thereby finding the significant coeficients.
+```{r}
+completeTrainingNonFactor <- complete(trainingNonFactor,1)
+trainingNewSet <- data.frame(completeTrainingNonFactor,trainingNew[,factorVar])
+
+nsv <- nearZeroVar(trainingNewSet,saveMetrics = TRUE)
+var <- nsv[nsv$nzv=="FALSE",] ; var <- row.names(var)
+trainingModelSet <- trainingNewSet[,var]
+
+fit <- glm(classe ~ .,data=trainingModelSet,family="binomial")
+newVar <- which(summary(fit)$coeff[-1,4] < 0.05)
+trainingMS <- trainingNewSet[,names(newVar)]
+trainingMS$classe <- training$classe
+```
+
+There are 50 variables which seem to significantly predict 'classe'. Further modelling excercise is carried out to create a good model fit. 
+
+Further analysing the testing set, there are many variables which are NA. Hence the predictions result in an error. Hence these variables are also removed before the final model is created.
+
+```{r}
+testNonNaColNames <- colnames(testing[colSums(!is.na(testing)) > 0])
+modelColNames <- colnames(trainingMS)
+netColNames <- intersect(modelColNames,testNonNaColNames)
+
+trainingMSNew <- trainingMS[,netColNames]
+trainingMSNew$classe <- trainingMS$classe
+```
+Random forest technique is used for the model fit with preprocessing done using pca and boxcox.
+##Modelling
+```{r cache=TRUE}
+modelfit <- train(classe ~ ., data = trainingMSNew, method = "rf",    preProcess = c("pca", "BoxCox"), trControl = trainControl(method = "cv"))
+```
+
+##Final model
+```{r}
+modelfit$finalModel
+```
+The above final model also gives the error rate. The low error rate shows the model performs a good fit.
+
+##Plot accuracy v/s random predictors
+```{r}
+plot(modelfit)
+```
+
+The plot shows that 22 variables will give a good prediction. Thereafter the accuracy further reduces
+
+##Prediction
+```{r}
+pred <- predict(modelfit,testing)
+```
+The result of the prediction for 20 test cases are `r pred`
+
